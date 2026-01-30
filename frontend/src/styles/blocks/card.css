@@ -45,10 +45,12 @@
 
 /* Modificador: Profile (Team) Card */
 .card--profile {
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
+
   padding: 1.5rem;
   border-color: transparent;
   background-color: var(--color-bg-page);
@@ -78,14 +80,20 @@
 /* Social buttons en cards de perfil */
 .card--profile {
   position: relative; /* para posicionar .card__social */
+  padding: 1.5rem 1.5rem 1.25rem 1.5rem;
 }
 
 .card__social {
-  margin-top: 1rem;
-  width: 100%;
+  margin-top: auto; /* empuja este bloque al fondo del card */
+  align-self: flex-end; /* lo alinea a la derecha dentro del card */
   display: flex;
-  justify-content: flex-end;
   gap: 0.5rem;
+
+  padding-top: 1rem; /* espacio entre texto y botones */
+}
+
+.card--profile .card__text {
+  margin-bottom: 0;
 }
 
 .btn--social {
