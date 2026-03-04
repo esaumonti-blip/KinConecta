@@ -481,15 +481,15 @@
     return landingSearchState.resultsDom;
   };
 
-  const scrollToResultsSection = () => {
-    const section = landingSearchState.resultsSection;
-    if (!section || !document.body.contains(section)) return;
-
-    const headerOffset = 112;
-    const targetTop = section.getBoundingClientRect().top + window.scrollY - headerOffset;
-
+  const scrollToLandingResults = () => {
+    const section =
+      landingSearchState.resultsSection || qs("[data-landing-results-section]");
+    if (!section) return;
+    const header = qs(".header");
+    const headerHeight = header ? header.getBoundingClientRect().height : 0;
+    const top = window.scrollY + section.getBoundingClientRect().top - headerHeight - 34;
     window.scrollTo({
-      top: Math.max(0, targetTop),
+      top: Math.max(0, top),
       behavior: prefersReduced ? "auto" : "smooth",
     });
   };
@@ -703,7 +703,7 @@
     renderCityOptions(searchDom.input?.value || "");
   };
 
-  const runLandingSearch = async () => {
+  const runLandingSearch = async ({ scrollToResults = false } = {}) => {
     if (landingSearchState.searching || !searchDom.input || !searchDom.button) return;
 
     const selectedCity = resolveSelectedCity();
@@ -717,7 +717,9 @@
     searchDom.input.blur();
     setSearchStatus(`Buscando opciones para ${selectedCity}...`);
     renderSearchLoading(selectedCity);
-    scrollToResultsSection();
+    if (scrollToResults) {
+      requestAnimationFrame(scrollToLandingResults);
+    }
 
     try {
       const { tours, guides } = await fetchLandingResults(selectedCity);
@@ -766,7 +768,7 @@
       landingSearchState.selectedCity = city;
       searchDom.input.value = city;
       setSearchStatus("");
-      void runLandingSearch();
+      void runLandingSearch({ scrollToResults: true });
     });
 
     searchDom.button.addEventListener("click", runLandingSearch);
