@@ -3,7 +3,7 @@ package org.generation.socialNetwork.profileGuide.model;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
-import org.generation.socialNetwork.user.model.User;
+import org.generation.socialNetwork.users.model.User;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
