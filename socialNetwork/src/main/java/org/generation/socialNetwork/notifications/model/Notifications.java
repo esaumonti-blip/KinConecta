@@ -24,7 +24,7 @@ public class Notifications {
     @ManyToOne
     @JoinColumn(name = "user_id", nullable = false)
     @JsonIgnore
-    private generation.socialNetwork.users.model.User user;
+    private Long userId;
 
     @Column(nullable = false)
     private  String type;

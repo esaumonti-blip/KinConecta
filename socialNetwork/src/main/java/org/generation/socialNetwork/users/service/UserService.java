@@ -144,7 +144,7 @@ public class UserService {
         if(notification.getRelatedEntityId() != null) notificationObject.setRelatedEntityId(notification.getRelatedEntityId());
         if(notification.getRelatedEntityType() != null) notificationObject.setRelatedEntityType(notification.getRelatedEntityType());
 
-        notificationObject.setUser(user);
+        notificationObject.setUserId(idUser);
         notificationsRepository.save(notificationObject);
         user.getNotifications().add(notificationObject);
         return userRepository.save(user);
