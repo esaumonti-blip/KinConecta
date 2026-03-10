@@ -61,7 +61,7 @@
       method,
       headers,
       body: config.body instanceof FormData ? config.body : config.body ? JSON.stringify(config.body) : undefined,
-      credentials: config.credentials || "include",
+      credentials: config.credentials || "omit",
     };
 
     let response = null;

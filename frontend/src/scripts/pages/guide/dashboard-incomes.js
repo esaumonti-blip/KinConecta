@@ -1,11 +1,12 @@
 /* =========================================================
-   Guía - Ingresos
+   Guia - Ingresos
    Base lista para integrar Spring Boot REST API.
    ========================================================= */
 
 const GuideIncomesApp = (() => {
   const isNetworkUnavailableError = (error) =>
     Boolean(error?.isNetworkError || error?.isApiUnavailable);
+
   const openUnderConstructionModal = () => {
     if (window.KCUnderConstruction?.open) {
       window.KCUnderConstruction.open();
@@ -15,14 +16,15 @@ const GuideIncomesApp = (() => {
   };
 
   const state = {
-    guideId: "guide_001", // TODO(AUTH): obtener guideId real desde sesión/JWT
+    guideId: null,
+    currentUser: null,
     selectedRange: "all",
     kpis: {
       monthlyIncome: 25450,
       monthlyIncomeDelta: "+12%",
       monthlyIncomeDeltaLabel: "vs mes anterior",
       pendingPayouts: 4200,
-      pendingPayoutsLabel: "Procesando el próximo martes",
+      pendingPayoutsLabel: "Procesando el proximo martes",
       totalWithdrawn: 142890,
       totalWithdrawnDelta: "+8%",
       totalWithdrawnDeltaLabel: "desde el inicio",
@@ -62,6 +64,9 @@ const GuideIncomesApp = (() => {
   };
 
   const dom = {
+    pageTitle: null,
+    pageSubtitle: null,
+    sidebarUserName: null,
     lastUpdatedAt: null,
     btnDownloadReport: null,
     btnWithdrawFunds: null,
@@ -102,7 +107,84 @@ const GuideIncomesApp = (() => {
     return "gray";
   };
 
+  function getCurrentGuideId() {
+    const direct = window.localStorage.getItem("kc_guide_id");
+    const directDigits = String(direct || "").match(/\d+/g);
+    const directParsed = Number(directDigits ? directDigits.join("") : direct);
+    if (Number.isFinite(directParsed) && directParsed > 0) return directParsed;
+
+    try {
+      const rawSession = window.localStorage.getItem("kc_temp_auth_session_v1");
+      const session = rawSession ? JSON.parse(rawSession) : null;
+      const role = String(session?.role || "").trim().toLowerCase();
+      const digits = String(session?.userId || "").match(/\d+/g);
+      const parsed = Number(digits ? digits.join("") : session?.userId);
+      if (role === "guide" && Number.isFinite(parsed) && parsed > 0) {
+        window.localStorage.setItem("kc_guide_id", String(parsed));
+        return parsed;
+      }
+    } catch (error) {
+      console.warn("No se pudo resolver el guideId desde la sesion local.", error);
+    }
+
+    return null;
+  }
+
+  async function hydrateCurrentUser() {
+    state.guideId = getCurrentGuideId();
+    if (!window.KCGuideApi?.profile?.getPublicProfile || !state.guideId) return;
+
+    try {
+      const response = await window.KCGuideApi.profile.getPublicProfile(state.guideId);
+      const profile = response?.data || {};
+      const name = String(profile.fullName || profile.name || "").trim();
+      if (!name) return;
+
+      state.currentUser = {
+        name,
+        location: String(profile.locationLabel || profile.location || "").trim(),
+      };
+
+      try {
+        const rawSession = window.localStorage.getItem("kc_temp_auth_session_v1");
+        const session = rawSession ? JSON.parse(rawSession) : {};
+        window.localStorage.setItem(
+          "kc_temp_auth_session_v1",
+          JSON.stringify({
+            ...session,
+            role: "guide",
+            userId: String(state.guideId),
+            fullName: name,
+          }),
+        );
+      } catch (error) {
+        console.warn("No se pudo actualizar la sesion local con el nombre del guia.", error);
+      }
+    } catch (error) {
+      console.warn("No se pudo cargar el usuario actual en ingresos desde API.", error);
+    }
+  }
+
+  function renderCurrentUser() {
+    if (dom.sidebarUserName && state.currentUser?.name) {
+      dom.sidebarUserName.textContent = state.currentUser.name;
+    }
+    if (dom.pageTitle) {
+      dom.pageTitle.textContent = state.currentUser?.name
+        ? `Ingresos de ${state.currentUser.name}`
+        : "Ingresos";
+    }
+    if (dom.pageSubtitle) {
+      dom.pageSubtitle.textContent = state.currentUser?.location
+        ? `Consulta tus movimientos y retiros desde ${state.currentUser.location}.`
+        : "Consulta tus movimientos y retiros.";
+    }
+  }
+
   const renderLoadingState = () => {
+    if (dom.pageTitle) dom.pageTitle.textContent = "Ingresos";
+    if (dom.pageSubtitle) dom.pageSubtitle.textContent = "Cargando informacion del guia...";
+
     if (dom.incomeChart) {
       dom.incomeChart.innerHTML = loadingMarkup("Cargando resumen...");
     }
@@ -206,13 +288,9 @@ const GuideIncomesApp = (() => {
   };
 
   async function hydrateFromApi() {
-    // TODO(BACKEND): reemplazar fallback local por llamadas reales.
-    // TODO(BACKEND): validar shape real de respuestas y mapear DTOs.
-    // TODO(BACKEND): mover guideId a contexto de autenticacion global.
-    if (!window.KCGuideApi) return;
+    if (!window.KCGuideApi || !state.guideId) return;
+
     try {
-      // Primero intentamos KPIs para evitar multiples requests fallidas
-      // cuando el backend no esta disponible.
       const kpisRes = await window.KCGuideApi.incomes.getKpis(state.guideId);
       const [chartRes, txRes] = await Promise.all([
         window.KCGuideApi.incomes.getChart(state.guideId, state.selectedRange),
@@ -226,12 +304,18 @@ const GuideIncomesApp = (() => {
       const apiChart = chartRes?.data;
       const apiTransactions = txRes?.data;
 
-      // TODO(BACKEND): ajustar mapeo final a los nombres reales del backend.
       if (apiKpis) {
         state.kpis.monthlyIncome = apiKpis.monthlyIncome ?? state.kpis.monthlyIncome;
         state.kpis.monthlyIncomeDelta = apiKpis.monthlyIncomeDelta ?? state.kpis.monthlyIncomeDelta;
+        state.kpis.monthlyIncomeDeltaLabel =
+          apiKpis.monthlyIncomeDeltaLabel ?? state.kpis.monthlyIncomeDeltaLabel;
         state.kpis.pendingPayouts = apiKpis.pendingPayouts ?? state.kpis.pendingPayouts;
+        state.kpis.pendingPayoutsLabel =
+          apiKpis.pendingPayoutsLabel ?? state.kpis.pendingPayoutsLabel;
         state.kpis.totalWithdrawn = apiKpis.totalWithdrawn ?? state.kpis.totalWithdrawn;
+        state.kpis.totalWithdrawnDelta = apiKpis.totalWithdrawnDelta ?? state.kpis.totalWithdrawnDelta;
+        state.kpis.totalWithdrawnDeltaLabel =
+          apiKpis.totalWithdrawnDeltaLabel ?? state.kpis.totalWithdrawnDeltaLabel;
       }
 
       if (Array.isArray(apiChart?.points)) {
@@ -242,15 +326,16 @@ const GuideIncomesApp = (() => {
         }));
       }
 
-      if (Array.isArray(apiTransactions?.items)) {
-        state.transactions = apiTransactions.items.map((item) => ({
+      const items = apiTransactions?.items || apiTransactions;
+      if (Array.isArray(items)) {
+        state.transactions = items.map((item) => ({
           id: item.id,
-          name: item.name,
-          details: item.details,
-          date: item.dateLabel,
-          type: item.typeLabel,
-          status: item.statusLabel,
-          amount: item.amountLabel,
+          name: item.name || item.title || "Movimiento",
+          details: item.details || item.description || "",
+          date: item.dateLabel || item.createdAtLabel || item.createdAt || "",
+          type: item.typeLabel || item.type || "Movimiento",
+          status: item.statusLabel || item.status || "Pendiente",
+          amount: item.amountLabel || money(item.amount || 0),
           icon: item.icon || "payments",
           iconClass: item.iconClass || "orange",
         }));
@@ -264,16 +349,20 @@ const GuideIncomesApp = (() => {
   const refreshData = async () => {
     renderLoadingState();
     await hydrateFromApi();
+    renderCurrentUser();
     renderKpis();
     renderChart();
     renderTransactions();
     if (dom.lastUpdatedAt) {
       const now = new Date();
-      dom.lastUpdatedAt.textContent = `Última actualización: ${now.toLocaleString("es-MX")}`;
+      dom.lastUpdatedAt.textContent = `Ultima actualizacion: ${now.toLocaleString("es-MX")}`;
     }
   };
 
   const bind = () => {
+    dom.pageTitle = document.querySelector(".guide-section__title");
+    dom.pageSubtitle = document.querySelector(".guide-section__subtitle");
+    dom.sidebarUserName = document.getElementById("userName");
     dom.lastUpdatedAt = document.getElementById("lastUpdatedAt");
     dom.btnDownloadReport = document.getElementById("btnDownloadReport");
     dom.btnWithdrawFunds = document.getElementById("btnWithdrawFunds");
@@ -298,27 +387,21 @@ const GuideIncomesApp = (() => {
       button.addEventListener("click", async () => {
         const nextRange = button.getAttribute("data-chart-range") || "all";
         state.selectedRange = nextRange;
-        dom.chartButtons.forEach((item) =>
-          item.classList.toggle("active", item === button),
-        );
+        dom.chartButtons.forEach((item) => item.classList.toggle("active", item === button));
         await refreshData();
       });
     });
 
     dom.transactionsSearchInput?.addEventListener("input", renderTransactions);
-
     dom.btnDownloadReport?.addEventListener("click", async () => {
       openUnderConstructionModal();
     });
-
     dom.btnWithdrawFunds?.addEventListener("click", async () => {
       openUnderConstructionModal();
     });
-
     dom.btnOpenTransactionsFilter?.addEventListener("click", () => {
       openUnderConstructionModal();
     });
-
     dom.btnViewAllTransactions?.addEventListener("click", () => {
       openUnderConstructionModal();
     });
@@ -326,6 +409,8 @@ const GuideIncomesApp = (() => {
 
   const init = async () => {
     bind();
+    await hydrateCurrentUser();
+    renderCurrentUser();
     await refreshData();
   };
 
@@ -351,4 +436,3 @@ if (document.readyState === "loading") {
 } else {
   bootstrapGuideIncomes();
 }
-

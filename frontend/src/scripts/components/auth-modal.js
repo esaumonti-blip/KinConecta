@@ -6,7 +6,8 @@
     "Enviaremos instrucciones a tu correo electr\u00f3nico para restablecer tu contrase\u00f1a.";
 
   // TODO(BACKEND): poner en false cuando /auth/register este disponible y estable.
-  const ALLOW_REGISTER_FLOW_WITHOUT_BACKEND = true;
+  const ALLOW_REGISTER_FLOW_WITHOUT_BACKEND = false;
+  const ALLOW_TEMP_AUTH_FALLBACK = false;
   // TEMPORAL: sesión local para acceso con usuarios de prueba.
   const TEMP_AUTH_SESSION_STORAGE_KEY = "kc_temp_auth_session_v1";
   // TEMPORAL: credenciales de acceso local para pruebas de flujo de login.
@@ -763,6 +764,34 @@
     }
   }
 
+  function persistBackendSession(result) {
+    const user = result?.data?.user;
+    const token = result?.data?.token;
+    const role = normalizeAccountRole(user?.role);
+    if (!user || !role) return;
+
+    if (token) localStorage.setItem("kcAuthToken", token);
+    localStorage.setItem("kcAuthMode", "backend");
+    localStorage.setItem("kcUserRole", role);
+    localStorage.setItem(
+      TEMP_AUTH_SESSION_STORAGE_KEY,
+      JSON.stringify({
+        mode: "backend",
+        role,
+        userId: String(user.userId || ""),
+        fullName: String(user.fullName || ""),
+        email: String(user.email || ""),
+        loginAt: new Date().toISOString(),
+      }),
+    );
+
+    if (role === "guide") {
+      localStorage.setItem("kc_guide_id", String(user.userId || ""));
+    } else if (role === "tourist") {
+      localStorage.setItem("kc_tourist_id", String(user.userId || ""));
+    }
+  }
+
   function setupRegisterRoleSelection(form) {
     if (!form) return;
     const roleButtons = [...form.querySelectorAll("[data-register-role]")];
@@ -801,39 +830,43 @@
     if (submitBtn) submitBtn.disabled = true;
 
     try {
-      // TEMPORAL: valida credenciales con usuarios prealmacenados en localStorage.
-      const tempAuth = getTempAuthService();
-      const tempUser = tempAuth?.validateLogin?.(payload.email, payload.password);
-      if (tempUser) {
-        persistTemporarySession(tempUser);
-        showFeedback(form, "Acceso temporal concedido. Redirigiendo...", true);
-        console.info("[KCAuthModal] Login temporal exitoso.", {
-          username: payload.email,
-          role: tempUser.role,
-        });
+      const service = getAuthService();
+      if (service?.login) {
+        const result = await service.login(payload);
+        persistBackendSession(result);
+
+        showFeedback(form, "Sesi\u00f3n iniciada correctamente.", true);
         window.setTimeout(() => {
           clearDraft(AUTH_LOGIN_DRAFT_STORAGE_KEY);
           closeModal({ force: true, persistDraft: false });
-          window.location.href = resolveDashboardPath(tempUser.role);
-        }, 240);
+          const nextRole = normalizeAccountRole(result?.data?.user?.role);
+          if (nextRole) {
+            window.location.href = resolveDashboardPath(nextRole);
+          }
+        }, 420);
         return;
       }
 
-      const service = getAuthService();
-      if (!service?.login) {
-        showInvalidLoginFeedback(form, payload.email);
-        return;
+      if (ALLOW_TEMP_AUTH_FALLBACK) {
+        const tempAuth = getTempAuthService();
+        const tempUser = tempAuth?.validateLogin?.(payload.email, payload.password);
+        if (tempUser) {
+          persistTemporarySession(tempUser);
+          showFeedback(form, "Acceso temporal concedido. Redirigiendo...", true);
+          console.info("[KCAuthModal] Login temporal exitoso.", {
+            username: payload.email,
+            role: tempUser.role,
+          });
+          window.setTimeout(() => {
+            clearDraft(AUTH_LOGIN_DRAFT_STORAGE_KEY);
+            closeModal({ force: true, persistDraft: false });
+            window.location.href = resolveDashboardPath(tempUser.role);
+          }, 240);
+          return;
+        }
       }
 
-      const result = await service.login(payload);
-      const token = result?.data?.token;
-      if (token) localStorage.setItem("kcAuthToken", token);
-
-      showFeedback(form, "Sesi\u00f3n iniciada correctamente.", true);
-      window.setTimeout(() => {
-        clearDraft(AUTH_LOGIN_DRAFT_STORAGE_KEY);
-        closeModal({ force: true, persistDraft: false });
-      }, 420);
+      showInvalidLoginFeedback(form, payload.email);
     } catch (error) {
       if (error?.message === "login-api-unavailable") {
         console.warn("KCAuthApi.auth.login no esta disponible.");

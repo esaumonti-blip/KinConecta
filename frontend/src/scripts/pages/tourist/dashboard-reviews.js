@@ -1,5 +1,7 @@
 const TouristReviewsApp = (() => {
   const state = {
+    touristId: null,
+    currentUser: null,
     summary: {
       totalReviews: 0,
       averageRating: 0,
@@ -48,6 +50,9 @@ const TouristReviewsApp = (() => {
   };
 
   const dom = {
+    pageTitle: null,
+    pageSubtitle: null,
+    sidebarUserName: null,
     statTotal: null,
     statAverage: null,
     statFiveStars: null,
@@ -65,11 +70,87 @@ const TouristReviewsApp = (() => {
   `;
 
   function renderLoadingState() {
+    if (dom.pageTitle) dom.pageTitle.textContent = "Mis reseñas";
+    if (dom.pageSubtitle) dom.pageSubtitle.textContent = "Cargando información del usuario...";
     if (dom.statTotal) dom.statTotal.textContent = "...";
     if (dom.statAverage) dom.statAverage.textContent = "...";
     if (dom.statFiveStars) dom.statFiveStars.textContent = "...";
     if (dom.statMonth) dom.statMonth.textContent = "...";
     if (dom.reviewsList) dom.reviewsList.innerHTML = loadingMarkup("Cargando resenas...");
+  }
+
+  function getCurrentTouristId() {
+    const direct = window.localStorage.getItem("kc_tourist_id");
+    const directDigits = String(direct || "").match(/\d+/g);
+    const directParsed = Number(directDigits ? directDigits.join("") : direct);
+    if (Number.isFinite(directParsed) && directParsed > 0) return directParsed;
+
+    try {
+      const rawSession = window.localStorage.getItem("kc_temp_auth_session_v1");
+      const session = rawSession ? JSON.parse(rawSession) : null;
+      const role = String(session?.role || "").trim().toLowerCase();
+      const digits = String(session?.userId || "").match(/\d+/g);
+      const parsed = Number(digits ? digits.join("") : session?.userId);
+      if (role === "tourist" && Number.isFinite(parsed) && parsed > 0) {
+        window.localStorage.setItem("kc_tourist_id", String(parsed));
+        return parsed;
+      }
+    } catch (error) {
+      console.warn("No se pudo resolver el touristId desde la sesion local.", error);
+    }
+
+    return null;
+  }
+
+  async function hydrateCurrentUser() {
+    state.touristId = getCurrentTouristId();
+    if (!window.KCTouristApi?.profile?.getMe || !state.touristId) return;
+
+    try {
+      const response = await window.KCTouristApi.profile.getMe(state.touristId);
+      const profile = response?.data || {};
+      const name = String(profile.name || profile.fullName || "").trim();
+      if (!name) return;
+
+      state.currentUser = {
+        name,
+        location: String(profile.location || "").trim(),
+      };
+
+      try {
+        const rawSession = window.localStorage.getItem("kc_temp_auth_session_v1");
+        const session = rawSession ? JSON.parse(rawSession) : {};
+        window.localStorage.setItem(
+          "kc_temp_auth_session_v1",
+          JSON.stringify({
+            ...session,
+            role: "tourist",
+            userId: String(state.touristId),
+            fullName: name,
+          }),
+        );
+      } catch (error) {
+        console.warn("No se pudo actualizar la sesion local con el nombre del turista.", error);
+      }
+    } catch (error) {
+      console.warn("No se pudo cargar el usuario actual en mis reseñas desde API.", error);
+    }
+  }
+
+  function renderCurrentUser() {
+    if (dom.sidebarUserName && state.currentUser?.name) {
+      dom.sidebarUserName.textContent = state.currentUser.name;
+    }
+    if (dom.pageTitle) {
+      dom.pageTitle.textContent = state.currentUser?.name
+        ? `Reseñas de ${state.currentUser.name}`
+        : "Resumen de reseñas";
+    }
+    if (dom.pageSubtitle) {
+      dom.pageSubtitle.textContent = state.currentUser?.location
+        ? `Consulta y gestiona el feedback de tus experiencias en ${state.currentUser.location}.`
+        : "Esta información te ayuda a mejorar futuras reservas.";
+    }
   }
 
   function mapReview(raw) {
@@ -100,8 +181,8 @@ const TouristReviewsApp = (() => {
 
     try {
       const [summaryRes, listRes] = await Promise.all([
-        window.KCTouristApi.reviews.getSummary(),
-        window.KCTouristApi.reviews.list({ page: 0, size: 20 }),
+        window.KCTouristApi.reviews.getSummary(state.touristId),
+        window.KCTouristApi.reviews.list({ page: 0, size: 20 }, state.touristId),
       ]);
 
       const summary = summaryRes?.data || {};
@@ -250,7 +331,7 @@ const TouristReviewsApp = (() => {
     try {
       if (window.KCTouristApi?.reviews?.update) {
         // TODO(BACKEND): reemplazar payload por endpoint dedicado para likes.
-        await window.KCTouristApi.reviews.update(review.id, { likedByMe: nextLiked });
+        await window.KCTouristApi.reviews.update(review.id, { likedByMe: nextLiked }, state.touristId);
       }
     } catch (error) {
       console.warn("Like update fallback enabled:", error);
@@ -286,7 +367,7 @@ const TouristReviewsApp = (() => {
     try {
       if (window.KCTouristApi?.reviews?.update) {
         // TODO(BACKEND): usar endpoint dedicado de comentarios/respuestas.
-        await window.KCTouristApi.reviews.update(review.id, { comment: text });
+        await window.KCTouristApi.reviews.update(review.id, { comment: text }, state.touristId);
       }
       review.replies += 1;
       state.activeCommentReviewId = "";
@@ -329,6 +410,9 @@ const TouristReviewsApp = (() => {
   }
 
   function bind() {
+    dom.pageTitle = document.querySelector(".tourist-section__title");
+    dom.pageSubtitle = document.querySelector(".tourist-section__subtitle");
+    dom.sidebarUserName = document.getElementById("userName");
     dom.statTotal = document.getElementById("reviewsStatTotal");
     dom.statAverage = document.getElementById("reviewsStatAverage");
     dom.statFiveStars = document.getElementById("reviewsStatFiveStars");
@@ -351,6 +435,8 @@ const TouristReviewsApp = (() => {
   async function init() {
     bind();
     renderLoadingState();
+    await hydrateCurrentUser();
+    renderCurrentUser();
     await hydrateFromApi();
     renderSummary();
     renderReviews();

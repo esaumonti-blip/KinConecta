@@ -810,7 +810,7 @@
   }
 
   if (form) {
-    form.addEventListener("submit", (event) => {
+    form.addEventListener("submit", async (event) => {
       event.preventDefault();
 
       const name = qs("#name", form)?.value.trim() || "";
@@ -839,8 +839,23 @@
 
       if (!valid) return;
 
-      form.reset();
-      showToast();
+      try {
+        if (window.KCApiClient?.post) {
+          await window.KCApiClient.post("/contact_messages", {
+            name,
+            email,
+            subject: "Contacto desde landing",
+            message,
+            sourcePage: "landing",
+            status: "NEW",
+            createdAt: new Date().toISOString(),
+          });
+        }
+        form.reset();
+        showToast();
+      } catch (error) {
+        console.warn("No se pudo enviar el mensaje de contacto al backend.", error);
+      }
     });
   }
 
@@ -849,7 +864,7 @@
   if (footerNewsletterForm && footerFeedback) {
     const newsletterEmail = qs('input[type="email"]', footerNewsletterForm);
 
-    footerNewsletterForm.addEventListener("submit", (event) => {
+    footerNewsletterForm.addEventListener("submit", async (event) => {
       event.preventDefault();
 
       const email = newsletterEmail?.value.trim() || "";
@@ -862,8 +877,22 @@
         return;
       }
 
-      footerFeedback.textContent = "Listo, te has unido a las novedades de Kin Conecta.";
-      footerNewsletterForm.reset();
+      try {
+        if (window.KCApiClient?.post) {
+          await window.KCApiClient.post("/newsletter_subscriptions", {
+            email,
+            sourcePage: "landing",
+            isActive: true,
+            createdAt: new Date().toISOString(),
+          });
+        }
+        footerFeedback.textContent = "Listo, te has unido a las novedades de Kin Conecta.";
+        footerNewsletterForm.reset();
+      } catch (error) {
+        footerFeedback.textContent = "No se pudo registrar tu correo en este momento.";
+        footerFeedback.classList.add("is-error");
+        console.warn("No se pudo guardar la suscripcion al newsletter en backend.", error);
+      }
     });
   }
 

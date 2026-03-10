@@ -8,6 +8,8 @@ const TouristExploreApp = (() => {
   };
 
   const state = {
+    touristId: null,
+    currentUser: null,
     activeFilter: "all",
     items: [],
   };
@@ -56,6 +58,9 @@ const TouristExploreApp = (() => {
   ];
 
   const dom = {
+    pageTitle: null,
+    pageSubtitle: null,
+    sidebarUserName: null,
     searchInput: null,
     cards: null,
     filters: [],
@@ -72,8 +77,86 @@ const TouristExploreApp = (() => {
   `;
 
   function renderLoadingState() {
+    if (dom.pageTitle) dom.pageTitle.textContent = "Explorar";
+    if (dom.pageSubtitle) dom.pageSubtitle.textContent = "Cargando información del usuario...";
     if (dom.cards) {
       dom.cards.innerHTML = loadingMarkup("Cargando experiencias...");
+    }
+  }
+
+  function getCurrentTouristId() {
+    const direct = window.localStorage.getItem("kc_tourist_id");
+    const directDigits = String(direct || "").match(/\d+/g);
+    const directParsed = Number(directDigits ? directDigits.join("") : direct);
+    if (Number.isFinite(directParsed) && directParsed > 0) return directParsed;
+
+    try {
+      const rawSession = window.localStorage.getItem("kc_temp_auth_session_v1");
+      const session = rawSession ? JSON.parse(rawSession) : null;
+      const role = String(session?.role || "").trim().toLowerCase();
+      const digits = String(session?.userId || "").match(/\d+/g);
+      const parsed = Number(digits ? digits.join("") : session?.userId);
+      if (role === "tourist" && Number.isFinite(parsed) && parsed > 0) {
+        window.localStorage.setItem("kc_tourist_id", String(parsed));
+        return parsed;
+      }
+    } catch (error) {
+      console.warn("No se pudo resolver el touristId desde la sesion local.", error);
+    }
+
+    return null;
+  }
+
+  async function hydrateCurrentUser() {
+    state.touristId = getCurrentTouristId();
+    if (!window.KCTouristApi?.profile?.getMe || !state.touristId) return;
+
+    try {
+      const response = await window.KCTouristApi.profile.getMe(state.touristId);
+      const profile = response?.data || {};
+      const name = String(profile.name || profile.fullName || "").trim();
+      if (!name) return;
+
+      state.currentUser = {
+        name,
+        location: String(profile.location || "").trim(),
+      };
+
+      try {
+        const rawSession = window.localStorage.getItem("kc_temp_auth_session_v1");
+        const session = rawSession ? JSON.parse(rawSession) : {};
+        window.localStorage.setItem(
+          "kc_temp_auth_session_v1",
+          JSON.stringify({
+            ...session,
+            role: "tourist",
+            userId: String(state.touristId),
+            fullName: name,
+          }),
+        );
+      } catch (error) {
+        console.warn("No se pudo actualizar la sesion local con el nombre del turista.", error);
+      }
+    } catch (error) {
+      console.warn("No se pudo cargar el usuario actual en explorar desde API.", error);
+    }
+  }
+
+  function renderCurrentUser() {
+    const name = state.currentUser?.name || "Explorar";
+    if (dom.sidebarUserName && state.currentUser?.name) {
+      dom.sidebarUserName.textContent = state.currentUser.name;
+    }
+    if (dom.pageTitle) {
+      dom.pageTitle.textContent = state.currentUser?.name
+        ? `Explorar para ${name}`
+        : "Explorar destinos y guías";
+    }
+    if (dom.pageSubtitle) {
+      const location = state.currentUser?.location;
+      dom.pageSubtitle.textContent = location
+        ? `Descubre experiencias y guías pensadas para ${location}.`
+        : "Encuentra la experiencia ideal para tu siguiente aventura.";
     }
   }
 
@@ -102,7 +185,7 @@ const TouristExploreApp = (() => {
       const response = await window.KCTouristApi.explore.listExperiences({
         page: 0,
         size: 24,
-      });
+      }, state.touristId);
       const data = response?.data?.items || response?.data || [];
       state.items = Array.isArray(data) && data.length
         ? data.map(mapExploreItem)
@@ -177,7 +260,7 @@ const TouristExploreApp = (() => {
         const itemId = event.currentTarget.getAttribute("data-toggle-favorite");
         try {
           if (window.KCTouristApi) {
-            await window.KCTouristApi.explore.toggleFavorite(itemId);
+            await window.KCTouristApi.explore.toggleFavorite(itemId, state.touristId);
           }
         } catch (error) {
           console.warn("Toggle favorite pending backend implementation:", error);
@@ -201,6 +284,9 @@ const TouristExploreApp = (() => {
   }
 
   function bind() {
+    dom.pageTitle = document.querySelector(".tourist-section__title");
+    dom.pageSubtitle = document.querySelector(".tourist-section__subtitle");
+    dom.sidebarUserName = document.getElementById("userName");
     dom.searchInput = document.getElementById("exploreSearchInput");
     dom.cards = document.getElementById("exploreCards");
     dom.filters = [...document.querySelectorAll("[data-filter]")];
@@ -229,6 +315,8 @@ const TouristExploreApp = (() => {
   async function init() {
     bind();
     renderLoadingState();
+    await hydrateCurrentUser();
+    renderCurrentUser();
     await hydrateFromApi();
     setActiveFilter("all");
   }

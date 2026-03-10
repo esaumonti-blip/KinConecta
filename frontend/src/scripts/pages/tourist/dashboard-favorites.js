@@ -1,5 +1,7 @@
 const TouristFavoritesApp = (() => {
   const state = {
+    touristId: null,
+    currentUser: null,
     activeTab: "guides",
     guides: [],
     experiences: [],
@@ -40,6 +42,9 @@ const TouristFavoritesApp = (() => {
   };
 
   const dom = {
+    pageTitle: null,
+    pageSubtitle: null,
+    sidebarUserName: null,
     tabs: [],
     countGuides: null,
     countExperiences: null,
@@ -57,8 +62,84 @@ const TouristFavoritesApp = (() => {
   `;
 
   function renderLoadingState() {
+    if (dom.pageTitle) dom.pageTitle.textContent = "Mis favoritos";
+    if (dom.pageSubtitle) dom.pageSubtitle.textContent = "Cargando información del usuario...";
     if (dom.cards) {
       dom.cards.innerHTML = loadingMarkup("Cargando favoritos...");
+    }
+  }
+
+  function getCurrentTouristId() {
+    const direct = window.localStorage.getItem("kc_tourist_id");
+    const directDigits = String(direct || "").match(/\d+/g);
+    const directParsed = Number(directDigits ? directDigits.join("") : direct);
+    if (Number.isFinite(directParsed) && directParsed > 0) return directParsed;
+
+    try {
+      const rawSession = window.localStorage.getItem("kc_temp_auth_session_v1");
+      const session = rawSession ? JSON.parse(rawSession) : null;
+      const role = String(session?.role || "").trim().toLowerCase();
+      const digits = String(session?.userId || "").match(/\d+/g);
+      const parsed = Number(digits ? digits.join("") : session?.userId);
+      if (role === "tourist" && Number.isFinite(parsed) && parsed > 0) {
+        window.localStorage.setItem("kc_tourist_id", String(parsed));
+        return parsed;
+      }
+    } catch (error) {
+      console.warn("No se pudo resolver el touristId desde la sesion local.", error);
+    }
+
+    return null;
+  }
+
+  async function hydrateCurrentUser() {
+    state.touristId = getCurrentTouristId();
+    if (!window.KCTouristApi?.profile?.getMe || !state.touristId) return;
+
+    try {
+      const response = await window.KCTouristApi.profile.getMe(state.touristId);
+      const profile = response?.data || {};
+      const name = String(profile.name || profile.fullName || "").trim();
+      if (!name) return;
+
+      state.currentUser = {
+        name,
+        location: String(profile.location || "").trim(),
+      };
+
+      try {
+        const rawSession = window.localStorage.getItem("kc_temp_auth_session_v1");
+        const session = rawSession ? JSON.parse(rawSession) : {};
+        window.localStorage.setItem(
+          "kc_temp_auth_session_v1",
+          JSON.stringify({
+            ...session,
+            role: "tourist",
+            userId: String(state.touristId),
+            fullName: name,
+          }),
+        );
+      } catch (error) {
+        console.warn("No se pudo actualizar la sesion local con el nombre del turista.", error);
+      }
+    } catch (error) {
+      console.warn("No se pudo cargar el usuario actual en favoritos desde API.", error);
+    }
+  }
+
+  function renderCurrentUser() {
+    if (dom.sidebarUserName && state.currentUser?.name) {
+      dom.sidebarUserName.textContent = state.currentUser.name;
+    }
+    if (dom.pageTitle) {
+      dom.pageTitle.textContent = state.currentUser?.name
+        ? `Favoritos de ${state.currentUser.name}`
+        : "Mis favoritos";
+    }
+    if (dom.pageSubtitle) {
+      dom.pageSubtitle.textContent = state.currentUser?.location
+        ? `Colección de guías y experiencias guardadas desde ${state.currentUser.location}.`
+        : "Colección de guías y experiencias guardadas.";
     }
   }
 
@@ -85,8 +166,8 @@ const TouristFavoritesApp = (() => {
 
     try {
       const [guidesRes, expRes] = await Promise.all([
-        window.KCTouristApi.favorites.listGuides({ page: 0, size: 24 }),
-        window.KCTouristApi.favorites.listExperiences({ page: 0, size: 24 }),
+        window.KCTouristApi.favorites.listGuides({ page: 0, size: 24 }, state.touristId),
+        window.KCTouristApi.favorites.listExperiences({ page: 0, size: 24 }, state.touristId),
       ]);
 
       const guides = guidesRes?.data?.items || guidesRes?.data || [];
@@ -169,9 +250,9 @@ const TouristFavoritesApp = (() => {
         try {
           if (window.KCTouristApi) {
             if (state.activeTab === "guides") {
-              await window.KCTouristApi.favorites.removeGuide(id);
+              await window.KCTouristApi.favorites.removeGuide(id, state.touristId);
             } else {
-              await window.KCTouristApi.favorites.removeExperience(id);
+              await window.KCTouristApi.favorites.removeExperience(id, state.touristId);
             }
           }
         } catch (error) {
@@ -200,6 +281,9 @@ const TouristFavoritesApp = (() => {
   }
 
   function bind() {
+    dom.pageTitle = document.querySelector(".tourist-section__title");
+    dom.pageSubtitle = document.querySelector(".tourist-section__subtitle");
+    dom.sidebarUserName = document.getElementById("userName");
     dom.tabs = [...document.querySelectorAll("[data-tab]")];
     dom.countGuides = document.getElementById("favoritesGuidesCount");
     dom.countExperiences = document.getElementById("favoritesExperiencesCount");
@@ -228,6 +312,8 @@ const TouristFavoritesApp = (() => {
   async function init() {
     bind();
     renderLoadingState();
+    await hydrateCurrentUser();
+    renderCurrentUser();
     await hydrateFromApi();
     updateCounters();
     setActiveTab("guides");

@@ -195,6 +195,29 @@ const TouristProfileApp = (() => {
     }
   }
 
+  function getCurrentTouristId() {
+    const direct = window.localStorage.getItem("kc_tourist_id");
+    const directDigits = String(direct || "").match(/\d+/g);
+    const directParsed = Number(directDigits ? directDigits.join("") : direct);
+    if (Number.isFinite(directParsed) && directParsed > 0) return directParsed;
+
+    try {
+      const rawSession = window.localStorage.getItem("kc_temp_auth_session_v1");
+      const session = rawSession ? JSON.parse(rawSession) : null;
+      const role = String(session?.role || "").trim().toLowerCase();
+      const digits = String(session?.userId || "").match(/\d+/g);
+      const parsed = Number(digits ? digits.join("") : session?.userId);
+      if (role === "tourist" && Number.isFinite(parsed) && parsed > 0) {
+        window.localStorage.setItem("kc_tourist_id", String(parsed));
+        return parsed;
+      }
+    } catch (error) {
+      console.warn("No se pudo resolver el touristId desde la sesion local.", error);
+    }
+
+    return null;
+  }
+
   function mapHistory(raw) {
     return {
       id: raw.id,
@@ -232,7 +255,7 @@ const TouristProfileApp = (() => {
     };
   }
 
-  async function hydrateFromApi() {
+  async function hydrateFromApi(currentTouristId) {
     if (!window.KCTouristApi) {
       state.history = fallbackHistory.slice();
       return;
@@ -240,12 +263,13 @@ const TouristProfileApp = (() => {
 
     try {
       const [profileRes, tripsRes] = await Promise.all([
-        window.KCTouristApi.profile.getMe(),
-        window.KCTouristApi.trips.list({ page: 0, size: 6 }),
+        window.KCTouristApi.profile.getMe(currentTouristId),
+        window.KCTouristApi.trips.list({ page: 0, size: 6 }, currentTouristId),
       ]);
 
       const profile = mapApiProfile(profileRes?.data || {});
       state.profile = mergeProfile(state.profile, profile);
+      persistProfile(state.profile);
 
       const rows = tripsRes?.data?.items || tripsRes?.data || [];
       state.history = Array.isArray(rows) && rows.length
@@ -530,8 +554,16 @@ const TouristProfileApp = (() => {
     bind();
     setupActions();
     renderLoadingState();
-    state.profile = readProfileFromStorage();
-    await hydrateFromApi();
+    const currentTouristId = getCurrentTouristId();
+    if (currentTouristId) {
+      await hydrateFromApi(currentTouristId);
+    } else {
+      state.profile = readProfileFromStorage();
+      await hydrateFromApi(null);
+    }
+    if (!state.profile?.name) {
+      state.profile = readProfileFromStorage();
+    }
     renderProfile();
     renderHistory();
   }

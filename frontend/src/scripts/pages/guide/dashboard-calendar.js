@@ -10,7 +10,8 @@ const GuideCalendarApp = (() => {
   const GOOGLE_TOKEN_SKEW_MS = 45 * 1000;
 
   const state = {
-    guideId: "guide_001", // TODO(AUTH): obtener desde JWT/sesion
+    guideId: null,
+    currentUser: null,
     view: "month", // month | week | list
     cursorDate: new Date(),
     selectedDateISO: null,
@@ -30,6 +31,9 @@ const GuideCalendarApp = (() => {
   };
 
   const dom = {
+    pageTitle: null,
+    pageSubtitle: null,
+    sidebarUserName: null,
     monthLabel: null,
     monthGrid: null,
     timeline: null,
@@ -136,6 +140,8 @@ const GuideCalendarApp = (() => {
   };
 
   function renderCalendarLoading() {
+    if (dom.pageTitle) dom.pageTitle.textContent = "Calendario";
+    if (dom.pageSubtitle) dom.pageSubtitle.textContent = "Cargando informacion del guia...";
     if (dom.monthGrid) {
       dom.monthGrid.innerHTML = loadingMarkup("Cargando calendario...", "guide-loading--grid-full");
     }
@@ -147,6 +153,80 @@ const GuideCalendarApp = (() => {
     }
     if (dom.selectedDateMeta) {
       dom.selectedDateMeta.textContent = "Cargando...";
+    }
+  }
+
+  function getCurrentGuideId() {
+    const direct = window.localStorage.getItem("kc_guide_id");
+    const directDigits = String(direct || "").match(/\d+/g);
+    const directParsed = Number(directDigits ? directDigits.join("") : direct);
+    if (Number.isFinite(directParsed) && directParsed > 0) return directParsed;
+
+    try {
+      const rawSession = window.localStorage.getItem("kc_temp_auth_session_v1");
+      const session = rawSession ? JSON.parse(rawSession) : null;
+      const role = String(session?.role || "").trim().toLowerCase();
+      const digits = String(session?.userId || "").match(/\d+/g);
+      const parsed = Number(digits ? digits.join("") : session?.userId);
+      if (role === "guide" && Number.isFinite(parsed) && parsed > 0) {
+        window.localStorage.setItem("kc_guide_id", String(parsed));
+        return parsed;
+      }
+    } catch (error) {
+      console.warn("No se pudo resolver el guideId desde la sesion local.", error);
+    }
+
+    return null;
+  }
+
+  async function hydrateCurrentUser() {
+    state.guideId = getCurrentGuideId();
+    if (!window.KCGuideApi?.profile?.getPublicProfile || !state.guideId) return;
+
+    try {
+      const response = await window.KCGuideApi.profile.getPublicProfile(state.guideId);
+      const profile = response?.data || {};
+      const name = String(profile.fullName || profile.name || "").trim();
+      if (!name) return;
+
+      state.currentUser = {
+        name,
+        location: String(profile.locationLabel || profile.location || "").trim(),
+      };
+
+      try {
+        const rawSession = window.localStorage.getItem("kc_temp_auth_session_v1");
+        const session = rawSession ? JSON.parse(rawSession) : {};
+        window.localStorage.setItem(
+          "kc_temp_auth_session_v1",
+          JSON.stringify({
+            ...session,
+            role: "guide",
+            userId: String(state.guideId),
+            fullName: name,
+          }),
+        );
+      } catch (error) {
+        console.warn("No se pudo actualizar la sesion local con el nombre del guia.", error);
+      }
+    } catch (error) {
+      console.warn("No se pudo cargar el usuario actual en calendario desde API.", error);
+    }
+  }
+
+  function renderCurrentUser() {
+    if (dom.sidebarUserName && state.currentUser?.name) {
+      dom.sidebarUserName.textContent = state.currentUser.name;
+    }
+    if (dom.pageTitle) {
+      dom.pageTitle.textContent = state.currentUser?.name
+        ? `Calendario de ${state.currentUser.name}`
+        : "Calendario";
+    }
+    if (dom.pageSubtitle) {
+      dom.pageSubtitle.textContent = state.currentUser?.location
+        ? `Gestiona tus bloques y reservas desde ${state.currentUser.location}.`
+        : "Gestiona tus bloques y reservas del mes.";
     }
   }
 
@@ -374,20 +454,7 @@ const GuideCalendarApp = (() => {
   }
 
   function resolveGuideId() {
-    try {
-      const raw = window.localStorage.getItem("kc_temp_auth_session_v1");
-      if (!raw) return state.guideId;
-      const parsed = JSON.parse(raw);
-      const candidate =
-        parsed?.guideId ||
-        parsed?.user?.guideId ||
-        parsed?.user?.id ||
-        parsed?.id ||
-        parsed?.profile?.guideId;
-      return candidate ? String(candidate) : state.guideId;
-    } catch (_error) {
-      return state.guideId;
-    }
+    return getCurrentGuideId() || state.guideId;
   }
 
   function setGoogleFeedback(message, tone = "info") {
@@ -1034,6 +1101,9 @@ const GuideCalendarApp = (() => {
   }
 
   function bind() {
+    dom.pageTitle = document.querySelector(".guide-section__title");
+    dom.pageSubtitle = document.querySelector(".guide-section__subtitle");
+    dom.sidebarUserName = document.getElementById("userName");
     dom.monthLabel = document.getElementById("monthLabel");
     dom.monthGrid = document.getElementById("monthGrid");
     dom.timeline = document.getElementById("timeline");
@@ -1078,6 +1148,8 @@ const GuideCalendarApp = (() => {
     state.guideId = resolveGuideId();
     restoreGoogleSession();
     bind();
+    await hydrateCurrentUser();
+    renderCurrentUser();
 
     state.google.clientId = resolveGoogleClientId();
     if (dom.googleCalendarId) dom.googleCalendarId.value = state.google.calendarId;

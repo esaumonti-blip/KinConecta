@@ -8,6 +8,8 @@ const TouristTripsApp = (() => {
   };
 
   const state = {
+    touristId: null,
+    currentUser: null,
     featuredTrip: null,
     trips: [],
     actionNoticeTimer: null,
@@ -53,6 +55,9 @@ const TouristTripsApp = (() => {
   ];
 
   const dom = {
+    pageTitle: null,
+    pageSubtitle: null,
+    sidebarUserName: null,
     featuredImage: null,
     featuredTitle: null,
     featuredLocation: null,
@@ -170,6 +175,8 @@ const TouristTripsApp = (() => {
   }
 
   function renderLoadingState() {
+    if (dom.pageTitle) dom.pageTitle.textContent = "Mis viajes";
+    if (dom.pageSubtitle) dom.pageSubtitle.textContent = "Cargando información del usuario...";
     if (dom.featuredImage) {
       dom.featuredImage.style.backgroundImage = "";
       dom.featuredImage.innerHTML = loadingMarkup("Cargando proximo viaje...", true);
@@ -181,6 +188,80 @@ const TouristTripsApp = (() => {
     if (dom.list) dom.list.innerHTML = loadingMarkup("Cargando historial de viajes...");
   }
 
+  function getCurrentTouristId() {
+    const direct = window.localStorage.getItem("kc_tourist_id");
+    const directDigits = String(direct || "").match(/\d+/g);
+    const directParsed = Number(directDigits ? directDigits.join("") : direct);
+    if (Number.isFinite(directParsed) && directParsed > 0) return directParsed;
+
+    try {
+      const rawSession = window.localStorage.getItem("kc_temp_auth_session_v1");
+      const session = rawSession ? JSON.parse(rawSession) : null;
+      const role = String(session?.role || "").trim().toLowerCase();
+      const digits = String(session?.userId || "").match(/\d+/g);
+      const parsed = Number(digits ? digits.join("") : session?.userId);
+      if (role === "tourist" && Number.isFinite(parsed) && parsed > 0) {
+        window.localStorage.setItem("kc_tourist_id", String(parsed));
+        return parsed;
+      }
+    } catch (error) {
+      console.warn("No se pudo resolver el touristId desde la sesion local.", error);
+    }
+
+    return null;
+  }
+
+  async function hydrateCurrentUser() {
+    state.touristId = getCurrentTouristId();
+    if (!window.KCTouristApi?.profile?.getMe || !state.touristId) return;
+
+    try {
+      const response = await window.KCTouristApi.profile.getMe(state.touristId);
+      const profile = response?.data || {};
+      const name = String(profile.name || profile.fullName || "").trim();
+      if (!name) return;
+
+      state.currentUser = {
+        name,
+        location: String(profile.location || "").trim(),
+      };
+
+      try {
+        const rawSession = window.localStorage.getItem("kc_temp_auth_session_v1");
+        const session = rawSession ? JSON.parse(rawSession) : {};
+        window.localStorage.setItem(
+          "kc_temp_auth_session_v1",
+          JSON.stringify({
+            ...session,
+            role: "tourist",
+            userId: String(state.touristId),
+            fullName: name,
+          }),
+        );
+      } catch (error) {
+        console.warn("No se pudo actualizar la sesion local con el nombre del turista.", error);
+      }
+    } catch (error) {
+      console.warn("No se pudo cargar el usuario actual en mis viajes desde API.", error);
+    }
+  }
+
+  function renderCurrentUser() {
+    if (dom.sidebarUserName && state.currentUser?.name) {
+      dom.sidebarUserName.textContent = state.currentUser.name;
+    }
+    if (dom.pageTitle) {
+      dom.pageTitle.textContent = state.currentUser?.name
+        ? `Viajes de ${state.currentUser.name}`
+        : "Próximo viaje";
+    }
+    if (dom.pageSubtitle) {
+      dom.pageSubtitle.textContent = state.currentUser?.location
+        ? `Gestiona reservas y cambios de tus viajes desde ${state.currentUser.location}.`
+        : "Resumen rápido de tu reserva más cercana.";
+    }
+  }
+
   async function hydrateFromApi() {
     if (!window.KCTouristApi) {
       state.trips = fallbackTrips.slice();
@@ -189,7 +270,7 @@ const TouristTripsApp = (() => {
     }
 
     try {
-      const response = await window.KCTouristApi.trips.list({ page: 0, size: 20 });
+      const response = await window.KCTouristApi.trips.list({ page: 0, size: 20 }, state.touristId);
       const data = response?.data?.items || response?.data || [];
       state.trips = Array.isArray(data) && data.length
         ? data.map(mapTrip)
@@ -205,7 +286,7 @@ const TouristTripsApp = (() => {
   async function hydrateTripDetail(trip) {
     if (!trip || !window.KCTouristApi?.trips?.detail) return;
     try {
-      const response = await window.KCTouristApi.trips.detail(trip.id);
+      const response = await window.KCTouristApi.trips.detail(trip.id, state.touristId);
       const detail = response?.data || {};
       trip.location = detail.location || detail.destination || trip.location;
       trip.dateLabel = detail.dateLabel || detail.date || trip.dateLabel;
@@ -300,10 +381,10 @@ const TouristTripsApp = (() => {
     try {
       if (window.KCTouristApi?.trips?.update) {
         // TODO(BACKEND): endpoint final para solicitar cambio de reserva.
-        await window.KCTouristApi.trips.update(trip.id, { status: "pending_change" });
+        await window.KCTouristApi.trips.update(trip.id, { status: "pending_change" }, state.touristId);
       } else if (window.KCTouristApi?.trips?.cancel) {
         // TODO(BACKEND): eliminar fallback cuando exista endpoint de cambios.
-        await window.KCTouristApi.trips.cancel(trip.id, { reason: "request_change" });
+        await window.KCTouristApi.trips.cancel(trip.id, { reason: "request_change" }, state.touristId);
       }
 
       trip.status = "pending_change";
@@ -423,6 +504,9 @@ const TouristTripsApp = (() => {
   }
 
   function bind() {
+    dom.pageTitle = document.querySelector(".tourist-section__title");
+    dom.pageSubtitle = document.querySelector(".tourist-section__subtitle");
+    dom.sidebarUserName = document.getElementById("userName");
     dom.featuredImage = document.getElementById("featuredTripImage");
     dom.featuredTitle = document.getElementById("featuredTripTitle");
     dom.featuredLocation = document.getElementById("featuredTripLocation");
@@ -473,6 +557,8 @@ const TouristTripsApp = (() => {
   async function init() {
     bind();
     renderLoadingState();
+    await hydrateCurrentUser();
+    renderCurrentUser();
     await hydrateFromApi();
     hydrateTripFromQuery();
     if (!state.featuredTrip && state.trips.length) {

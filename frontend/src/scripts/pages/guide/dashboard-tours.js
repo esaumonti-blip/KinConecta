@@ -1,5 +1,5 @@
 /* =========================================================
-   Guía - Mis recorridos
+   Guia - Mis recorridos
    API-first con modal CRUD listo para integrar Spring Boot.
    ========================================================= */
 
@@ -13,7 +13,8 @@ const GuideToursApp = (() => {
   };
 
   const state = {
-    guideId: "guide_001", // TODO(AUTH): obtener desde sesión/JWT
+    guideId: null,
+    currentUser: null,
     tours: [],
     isSaving: false,
     modalInitialSnapshot: "",
@@ -21,6 +22,9 @@ const GuideToursApp = (() => {
 
   const dom = {
     alertContainer: null,
+    pageTitle: null,
+    pageSubtitle: null,
+    sidebarUserName: null,
     toursGrid: null,
     btnCreateTour: null,
     modal: null,
@@ -50,15 +54,91 @@ const GuideToursApp = (() => {
   `;
 
   function renderToursLoading() {
+    if (dom.pageTitle) dom.pageTitle.textContent = "Mis recorridos";
+    if (dom.pageSubtitle) dom.pageSubtitle.textContent = "Cargando informacion del guia...";
     if (!dom.toursGrid) return;
     dom.toursGrid.innerHTML = loadingMarkup("Cargando recorridos...");
+  }
+
+  function getCurrentGuideId() {
+    const direct = window.localStorage.getItem("kc_guide_id");
+    const directDigits = String(direct || "").match(/\d+/g);
+    const directParsed = Number(directDigits ? directDigits.join("") : direct);
+    if (Number.isFinite(directParsed) && directParsed > 0) return directParsed;
+
+    try {
+      const rawSession = window.localStorage.getItem("kc_temp_auth_session_v1");
+      const session = rawSession ? JSON.parse(rawSession) : null;
+      const role = String(session?.role || "").trim().toLowerCase();
+      const digits = String(session?.userId || "").match(/\d+/g);
+      const parsed = Number(digits ? digits.join("") : session?.userId);
+      if (role === "guide" && Number.isFinite(parsed) && parsed > 0) {
+        window.localStorage.setItem("kc_guide_id", String(parsed));
+        return parsed;
+      }
+    } catch (error) {
+      console.warn("No se pudo resolver el guideId desde la sesion local.", error);
+    }
+
+    return null;
+  }
+
+  async function hydrateCurrentUser() {
+    state.guideId = getCurrentGuideId();
+    if (!window.KCGuideApi?.profile?.getPublicProfile || !state.guideId) return;
+
+    try {
+      const response = await window.KCGuideApi.profile.getPublicProfile(state.guideId);
+      const profile = response?.data || {};
+      const name = String(profile.fullName || profile.name || "").trim();
+      if (!name) return;
+
+      state.currentUser = {
+        name,
+        location: String(profile.locationLabel || profile.location || "").trim(),
+      };
+
+      try {
+        const rawSession = window.localStorage.getItem("kc_temp_auth_session_v1");
+        const session = rawSession ? JSON.parse(rawSession) : {};
+        window.localStorage.setItem(
+          "kc_temp_auth_session_v1",
+          JSON.stringify({
+            ...session,
+            role: "guide",
+            userId: String(state.guideId),
+            fullName: name,
+          }),
+        );
+      } catch (error) {
+        console.warn("No se pudo actualizar la sesion local con el nombre del guia.", error);
+      }
+    } catch (error) {
+      console.warn("No se pudo cargar el usuario actual en recorridos desde API.", error);
+    }
+  }
+
+  function renderCurrentUser() {
+    if (dom.sidebarUserName && state.currentUser?.name) {
+      dom.sidebarUserName.textContent = state.currentUser.name;
+    }
+    if (dom.pageTitle) {
+      dom.pageTitle.textContent = state.currentUser?.name
+        ? `Recorridos de ${state.currentUser.name}`
+        : "Mis recorridos";
+    }
+    if (dom.pageSubtitle) {
+      dom.pageSubtitle.textContent = state.currentUser?.location
+        ? `Administra tus experiencias publicadas desde ${state.currentUser.location}.`
+        : "Administra tus experiencias publicadas y borradores.";
+    }
   }
 
   function normalizeTour(raw) {
     return {
       id: raw.id ?? createUid(),
-      title: raw.title || "Recorrido sin título",
-      description: raw.description || "Sin descripción",
+      title: raw.title || "Recorrido sin titulo",
+      description: raw.description || "Sin descripcion",
       price: Number(raw.price || 0),
       currency: raw.currency || "MXN",
       bookings: Number(raw.bookings || 0),
@@ -81,9 +161,7 @@ const GuideToursApp = (() => {
   }
 
   async function hydrateFromApi() {
-    // TODO(BACKEND): aplicar paginación, filtros y ordenamiento en server-side.
-    // TODO(BACKEND): mover guideId al contexto de autenticacion global.
-    if (!window.KCGuideApi) {
+    if (!window.KCGuideApi || !state.guideId) {
       state.tours = await fetchFallbackTours();
       return;
     }
@@ -94,7 +172,7 @@ const GuideToursApp = (() => {
         size: 100,
       });
       const items = response?.data?.items || response?.data || [];
-      if (!Array.isArray(items)) throw new Error("Respuesta de tours inválida");
+      if (!Array.isArray(items)) throw new Error("Respuesta de tours invalida");
       state.tours = items.map(normalizeTour);
     } catch (error) {
       console.warn("Tours API fallback enabled:", error);
@@ -126,7 +204,7 @@ const GuideToursApp = (() => {
           <span class="material-symbols-outlined">edit</span> Editar
         </button>
         <button class="btn-disabled" type="button" disabled>
-          <span class="material-symbols-outlined">hourglass_empty</span> En revisión
+          <span class="material-symbols-outlined">hourglass_empty</span> En revision
         </button>
       `;
     }
@@ -249,31 +327,31 @@ const GuideToursApp = (() => {
 
     const title = dom.fieldTitle.value.trim();
     if (title.length < 5) {
-      showFieldError(dom.fieldTitle, "El título debe tener al menos 5 caracteres.");
+      showFieldError(dom.fieldTitle, "El titulo debe tener al menos 5 caracteres.");
       isValid = false;
     }
 
     const description = dom.fieldDescription.value.trim();
     if (description.length < 20) {
-      showFieldError(dom.fieldDescription, "La descripción debe tener al menos 20 caracteres.");
+      showFieldError(dom.fieldDescription, "La descripcion debe tener al menos 20 caracteres.");
       isValid = false;
     }
 
     const price = Number(dom.fieldPrice.value);
     if (Number.isNaN(price) || price < 0) {
-      showFieldError(dom.fieldPrice, "Ingresa un precio válido.");
+      showFieldError(dom.fieldPrice, "Ingresa un precio valido.");
       isValid = false;
     }
 
     const category = dom.fieldCategory.value.trim();
     if (!category) {
-      showFieldError(dom.fieldCategory, "La categoría es obligatoria.");
+      showFieldError(dom.fieldCategory, "La categoria es obligatoria.");
       isValid = false;
     }
 
     const duration = Number(dom.fieldDuration.value);
     if (Number.isNaN(duration) || duration < 1 || duration > 12) {
-      showFieldError(dom.fieldDuration, "La duración debe estar entre 1 y 12 horas.");
+      showFieldError(dom.fieldDuration, "La duracion debe estar entre 1 y 12 horas.");
       isValid = false;
     }
 
@@ -285,7 +363,7 @@ const GuideToursApp = (() => {
 
     const meetingPoint = dom.fieldMeetingPoint.value.trim();
     if (meetingPoint.length < 5) {
-      showFieldError(dom.fieldMeetingPoint, "Ingresa un punto de encuentro válido.");
+      showFieldError(dom.fieldMeetingPoint, "Ingresa un punto de encuentro valido.");
       isValid = false;
     }
 
@@ -407,9 +485,7 @@ const GuideToursApp = (() => {
   }
 
   async function createTour(payload) {
-    // TODO(BACKEND): endpoint real POST /guides/{guideId}/tours
-    // TODO(BACKEND): soportar upload de portada via FormData y endpoint dedicado.
-    if (window.KCGuideApi) {
+    if (window.KCGuideApi && state.guideId) {
       try {
         const response = await window.KCGuideApi.tours.create(state.guideId, payload);
         const created = response?.data || payload;
@@ -434,8 +510,7 @@ const GuideToursApp = (() => {
   }
 
   async function updateTour(tourId, payload) {
-    // TODO(BACKEND): endpoint real PUT /guides/{guideId}/tours/{tourId}
-    if (window.KCGuideApi) {
+    if (window.KCGuideApi && state.guideId) {
       try {
         const response = await window.KCGuideApi.tours.update(state.guideId, tourId, payload);
         const updated = response?.data || payload;
@@ -527,6 +602,9 @@ const GuideToursApp = (() => {
 
   function bind() {
     dom.alertContainer = document.getElementById("alertContainer");
+    dom.pageTitle = document.querySelector(".guide-section__title");
+    dom.pageSubtitle = document.querySelector(".guide-section__subtitle");
+    dom.sidebarUserName = document.getElementById("userName");
     dom.toursGrid = document.getElementById("toursGrid");
     dom.btnCreateTour = document.getElementById("btnCreateTour");
     dom.modal = document.getElementById("tourModal");
@@ -567,11 +645,10 @@ const GuideToursApp = (() => {
   async function init() {
     bind();
     renderToursLoading();
+    await hydrateCurrentUser();
+    renderCurrentUser();
     await hydrateFromApi();
     renderTours();
-
-    // TODO(BACKEND): agregar remove/publish/duplicate con endpoints dedicados.
-    // TODO(BACKEND): rehidratacion al volver de pantallas de "reservas de tour".
   }
 
   return { init };
@@ -594,4 +671,3 @@ if (document.readyState === "loading") {
 } else {
   bootstrapGuideTours();
 }
-

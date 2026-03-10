@@ -130,6 +130,13 @@ const GuideProfileEditApp = (() => {
     }
   }
 
+  function getGuideId() {
+    const raw = window.localStorage.getItem("kc_guide_id");
+    const digits = String(raw || "").match(/\d+/g);
+    const parsed = Number(digits ? digits.join("") : raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+  }
+
   function listToText(items) {
     return items.join("\n");
   }
@@ -216,6 +223,25 @@ const GuideProfileEditApp = (() => {
 
     try {
       window.localStorage.setItem(GUIDE_PROFILE_STORAGE_KEY, JSON.stringify(payload));
+
+      try {
+        if (window.KCGuideApi?.profile?.updateSettings) {
+          await window.KCGuideApi.profile.updateSettings(getGuideId(), {
+            summary: payload.summary,
+            locationLabel: payload.locations.join(", "),
+            experienceLevel: payload.experienceLevel,
+            style: payload.style,
+            groupSize: payload.groupSize,
+            tourIntensity: payload.tourIntensity,
+            transportOffered: payload.transportOffered,
+            photoStyle: payload.photoStyle,
+            additionalNotes: payload.additionalNotes,
+          });
+        }
+      } catch (apiError) {
+        console.warn("No se pudo sincronizar el perfil de guia con API. Se conservaron cambios locales.", apiError);
+      }
+
       setFeedback("Perfil actualizado correctamente. Redirigiendo...", "is-success");
       window.setTimeout(() => {
         window.location.href = "profileGuide.html";
@@ -253,6 +279,32 @@ const GuideProfileEditApp = (() => {
   async function init() {
     bind();
     state.profile = readProfileFromStorage();
+    try {
+      if (window.KCGuideApi?.profile?.getPublicProfile) {
+        const response = await window.KCGuideApi.profile.getPublicProfile(getGuideId());
+        const apiProfile = response?.data || null;
+        if (apiProfile) {
+          state.profile = normalizeProfile({
+            name: apiProfile.fullName || state.profile.name,
+            summary: apiProfile.summary,
+            areasExperience: apiProfile.areasExperience,
+            locations: apiProfile.locations,
+            experienceLevel: apiProfile.experienceLevel,
+            languages: apiProfile.languages,
+            style: apiProfile.style,
+            groupSize: apiProfile.groupSize,
+            tourIntensity: apiProfile.tourIntensity,
+            transportOffered: apiProfile.transportOffered,
+            certifications: apiProfile.certifications,
+            adaptations: apiProfile.adaptations,
+            photoStyle: apiProfile.photoStyle,
+            additionalNotes: apiProfile.additionalNotes,
+          });
+        }
+      }
+    } catch (error) {
+      console.warn("No se pudo cargar el perfil de guia desde API. Se usara el respaldo local.", error);
+    }
     fillForm(state.profile);
   }
 
